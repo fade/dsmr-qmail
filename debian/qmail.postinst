@@ -96,7 +96,21 @@ configure() {
 
     # Auxiliary control files (created only if absent)
     [ -f "$CTRLDIR/concurrencyincoming" ] || echo 20        > "$CTRLDIR/concurrencyincoming"
-    [ -f "$CTRLDIR/softlimit"           ] || echo 12000000  > "$CTRLDIR/softlimit"
+    [ -f "$CTRLDIR/softlimit"           ] || echo 100000000 > "$CTRLDIR/softlimit"
+
+    # Detect-and-warn: a softlimit created before the 100MB default is too low
+    # for the OpenSSL/krb5 library footprint of qmail-smtpd, which then fails to
+    # start with "failed to map segment from shared object".  Because the file
+    # is created only when absent, an upgrade never repairs an existing low
+    # value — so we flag it.  We do not rewrite it; the admin may have set it.
+    if [ -f "$CTRLDIR/softlimit" ]; then
+        _sl=$(tr -cd '0-9' < "$CTRLDIR/softlimit")
+        if [ -n "$_sl" ] && [ "$_sl" -lt 100000000 ]; then
+            echo "WARNING: $CTRLDIR/softlimit is ${_sl} (< 100000000)." >&2
+            echo "         qmail-smtpd links OpenSSL+krb5 and may fail to start under" >&2
+            echo "         this address-space cap.  Fix with: dsmr-email-admin fix softlimit" >&2
+        fi
+    fi
 
     # TCP rules — SMTP port 25
     if [ ! -f "$CTRLDIR/tcp.smtp.cdb" ]; then
