@@ -1,3 +1,13 @@
+netqmail (1.06.3-11) trixie; urgency=low
+
+  * postinst: emit the DKIM DNS record as multiple <=255-byte quoted strings
+    inside parentheses.  An RSA-2048 key's "v=DKIM1; k=rsa; p=..." value is
+    ~410 bytes; printed as one TXT character-string it exceeds the 255-octet
+    limit (RFC 1035 3.3.14) and BIND refuses to load the zone.  Validated with
+    named-checkzone.
+
+ -- Brian O'Reilly <fade@deepsky.com>  Wed, 03 Jun 2026 13:28:16 -0400
+
 netqmail (1.06.3-10) trixie; urgency=low
 
   * postinst: detect-and-warn on upgrade when control/softlimit is below the
