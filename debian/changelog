@@ -1,3 +1,14 @@
+netqmail (1.06.3-12) trixie; urgency=low
+
+  * Ship a DSMR-focused GNU info manual and HTML doc page derived from an
+    org-mode source of truth (doc/qmail.org): the netqmail feature set, the FHS
+    layout, the three services and their activation by dsmr-qmail-run, the
+    install-time provisioning, the control files, and the debugging gotchas.
+    Generators (emacs, texinfo, pandoc) are Build-Depends only; the upstream
+    per-command man pages still ship as-is.  Supersedes the old README.dsmr.
+
+ -- Brian O'Reilly <fade@deepsky.com>  Fri, 05 Jun 2026 12:00:00 -0400
+
 netqmail (1.06.3-11) trixie; urgency=low
 
   * postinst: emit the DKIM DNS record as multiple <=255-byte quoted strings

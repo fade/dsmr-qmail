@@ -1,5 +1,11 @@
 #!/usr/bin/make -f
 
+# DSMR-focused info manual + HTML page, derived from the org source of truth
+# (doc/qmail.org) at build time.  Generators (emacs, texinfo, pandoc) are
+# Build-Depends only; the upstream per-command man pages still ship as-is.
+EMACS ?= emacs
+TOPIC = doc/qmail
+
 STRIP =strip
 ifneq (,$(findstring nostrip,$(DEB_BUILD_OPTIONS)))
   STRIP =: nostrip
@@ -25,10 +31,20 @@ build-stamp: patch-stamp
 	test -r conf-qmail'{orig}' || cp conf-qmail conf-qmail'{orig}'
 	echo /var/lib/qmail >conf-qmail
 	$(MAKE) it man
+	# Generate the DSMR info manual and HTML doc page from org.
+	$(EMACS) --batch -Q \
+	    --eval "(require 'ox-texinfo)" \
+	    --eval "(with-current-buffer (find-file-noselect \"$(TOPIC).org\") (org-texinfo-export-to-texinfo))"
+	makeinfo --no-split "$(TOPIC).texi" -o "$(TOPIC).info"
+	$(EMACS) --batch -Q \
+	    --eval "(require 'ox-html)" \
+	    --eval "(setq org-html-validation-link nil)" \
+	    --eval "(with-current-buffer (find-file-noselect \"$(TOPIC).org\") (org-html-export-to-html))"
 	touch build-stamp
 
 clean: deb-checkdir deb-checkuid
 	$(MAKE) clean
+	rm -f '$(TOPIC).texi' '$(TOPIC).info' '$(TOPIC).html'
 	test ! -r conf-qmail'{orig}' || mv -f conf-qmail'{orig}' conf-qmail
 	test ! -e patch-stamp || \
 	  for i in `ls -1r debian/diff/*.diff || :`; do patch -p1 -R <$$i; done
@@ -121,6 +137,10 @@ install-arch: deb-checkdir deb-checkuid build-stamp
 	    '$(DIR)'/usr/share/man/man$${i##*.}/$${i}qmail || exit 1; \
 	done
 	gzip -9 '$(DIR)'/usr/share/man/man?/*
+	# DSMR info manual (the install-info file trigger registers it in the dir)
+	install -d -m0755 '$(DIR)'/usr/share/info
+	install -m0644 doc/qmail.info '$(DIR)'/usr/share/info/qmail.info
+	gzip -9 '$(DIR)'/usr/share/info/qmail.info
 	# Install supervise run scripts to /usr/lib/qmail/supervise/
 	for svc in qmail-send qmail-smtpd qmail-submission; do \
 	  install -d '$(DIR)'/usr/lib/qmail/supervise/$$svc/log; \

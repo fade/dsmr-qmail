@@ -218,3 +218,8 @@ build.out
 build-stamp
 patch-stamp
 conf-qmail{orig}
+
+# generated documentation (org is the source of truth)
+doc/qmail.texi
+doc/qmail.info
+doc/qmail.html

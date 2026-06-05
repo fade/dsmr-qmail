@@ -1,0 +1,209 @@
+#+TITLE: qmail — the DSMR netqmail packaging
+#+AUTHOR: Brian O'Reilly
+#+LANGUAGE: en
+#+OPTIONS: toc:2 num:nil
+#+TEXINFO_DIR_CATEGORY: Mail
+#+TEXINFO_DIR_TITLE: qmail: (qmail).
+#+TEXINFO_DIR_DESC: DSMR packaging of sagredo-dev netqmail 1.06.3 (TLS/DKIM/SPF/SRS/chkuser)
+#+TEXINFO_FILENAME: qmail.info
+
+* TL;DR
+:PROPERTIES:
+:DESCRIPTION: What this packaging ships and how it differs from stock qmail.
+:END:
+
+The =qmail= package is the DSMR Debian packaging of the *sagredo-dev netqmail
+1.06.3* distribution — a hardened, feature-extended rebuild of D. J. Bernstein's
+qmail MTA. On top of netqmail 1.06 it carries TLS, DKIM, SPF, SRS, DNSBL,
+chkuser recipient verification, EAI/SMTPUTF8, SNI, and forward-confirmed HELO DNS
+checking. The companion =qmail-uids-gids= package creates the system accounts the
+MTA runs as.
+
+This manual documents *what the DSMR packaging does* — the FHS layout it imposes,
+what the install-time provisioning sets up, the control files that matter, and
+the gotchas. It is not a re-derivation of upstream qmail documentation; the
+per-command reference is the upstream man pages shipped in this package
+(*qmail-smtpd(8)*, *qmail-send(8)*, *qmail-inject(8)*, …) and the design notes
+under =/usr/share/doc/qmail/=.
+
+The services are *installed but not activated* by this package: it ships the
+binaries, the queue, control-file provisioning, and the supervise run-script
+sources under =/usr/lib/qmail/supervise/=. Bringing the services up is the job of
+*dsmr-qmail-run* (which owns =qmailctl= and the =/etc/service= wiring).
+
+* Theory of operation
+:PROPERTIES:
+:DESCRIPTION: The feature set, the FHS layout, the services, and the postinst.
+:END:
+
+** What the rebuild adds over stock netqmail
+| Feature        | Version  | Function                                    |
+|----------------+----------+---------------------------------------------|
+| TLS            | 20231230 | STARTTLS on SMTP/submission, client certs   |
+| DKIM           | 1.48     | RFC 6376 outbound signing / verification    |
+| SPF            | rc5      | Sender Policy Framework checks at SMTP time |
+| SRS            | —        | Sender Rewriting Scheme for forwarded mail  |
+| chkuser        | 2.0.9    | recipient verification at RCPT time         |
+| qmail-dnsbl    | —        | DNSBL-based rejection                       |
+| EAI / SMTPUTF8 | —        | RFC 6531 internationalised addresses        |
+| helodnscheck   | —        | forward-confirmed reverse DNS on HELO       |
+
+** FHS layout
+The packaging splits the traditional single =/var/qmail= tree across FHS
+locations and keeps =/var/qmail= as a compatibility symlink:
+
+| Path                        | Contents                                   |
+|-----------------------------+--------------------------------------------|
+| =/usr/bin/=, =/usr/sbin/=   | qmail binaries (user vs admin commands)    |
+| =/var/lib/qmail/=           | runtime home: queue, boot, control, users  |
+| =/etc/qmail/=               | configuration (symlink target of control/) |
+| =/var/qmail/=               | compatibility symlink → =/var/lib/qmail/=  |
+| =/usr/lib/qmail/supervise/= | supervise run-script sources               |
+| =/var/log/qmail/=           | multilog log directories                   |
+
+Binaries physically live in =/usr/bin= / =/usr/sbin= with symlinks back into
+=/var/lib/qmail/bin/=, so both modern =PATH= use and legacy =/var/qmail/bin=
+references resolve.
+
+** The three services
+| Service            | Port | Auth          | Role                          |
+|--------------------+------+---------------+-------------------------------|
+| =qmail-send=       |    — | —             | queue runner + local delivery |
+| =qmail-smtpd=      |   25 | none (open)   | inbound SMTP reception        |
+| =qmail-submission= |  587 | vchkpw/bridge | authenticated submission      |
+
+The run-script *sources* ship here; *dsmr-qmail-run* installs/refreshes the
+active trees and brings them up. See that package's manual for =qmailctl=.
+
+** What install-time provisioning does
+=qmail-uids-gids.postinst= creates the =alias=, =qmaild/qmaill/qmailp=,
+=qmailq/qmailr/qmails=, and =vpopmail= accounts. =qmail.postinst= (debconf-driven
+on first install) then:
+
+- runs =config-fast= to seed =control/me=, =locals=, =rcpthosts= from the
+  prompted hostname/domain;
+- creates the queue trigger FIFO and the =/var/log/qmail/{send,smtpd,submission}/=
+  log trees;
+- sets =control/concurrencyincoming= and =control/softlimit= (default *100 MB* —
+  see Gotchas);
+- compiles =tcp.smtp.cdb= / =tcp.submission.cdb= relay rules;
+- provisions the TLS certificate at =control/servercert.pem= (Let's Encrypt if
+  present, else self-signed), owned =root:vchkpw= so qmail-smtpd can read it;
+- generates a 2048-bit DKIM key under =control/domainkeys/= and prints the DNS
+  TXT record;
+- migrates a legacy =/var/qmail= real directory to the new layout if found.
+
+* Usage
+:PROPERTIES:
+:DESCRIPTION: Install order, the control files, and everyday operations.
+:END:
+
+Install in dependency order; debconf prompts for the hostname and primary
+domain:
+
+: # dpkg -i qmail-uids-gids_*.deb
+: # dpkg -i qmail_*.deb
+
+Key control files (all under =/etc/qmail/=, = =/var/lib/qmail/control/=):
+
+| File             | Purpose                                          |
+|------------------+--------------------------------------------------|
+| =me=             | this server's FQDN                               |
+| =locals=         | locally-delivered domains                        |
+| =rcpthosts=      | accepted recipient domains                       |
+| =servercert.pem= | combined TLS cert+key (=root:vchkpw=)            |
+| =domainkeys/=    | DKIM private keys                                |
+| =filterargs=     | enables outbound DKIM via =spawn-filter=         |
+| =softlimit=      | per-process memory cap for the smtpd run scripts |
+| =tcp.smtp[.cdb]= | tcprules relay control for port 25               |
+
+Everyday operations (service control is via *dsmr-qmail-run*'s =qmailctl=):
+
+: # qmailctl stat                      # service + queue status
+: # qmailctl restart                   # re-exec run scripts after control edits
+: # /usr/sbin/qmail-qread              # queue listing
+: # /usr/sbin/qmail-qstat              # queue summary
+: # echo 'Subject: t' | qmail-inject user@example.com   # inject a test message
+: # tail -f /var/log/qmail/send/current | tai64nlocal   # human-readable log
+
+Add a domain and reload:
+
+: # echo newdomain.example >> /etc/qmail/rcpthosts
+: # echo newdomain.example >> /etc/qmail/locals
+: # qmailctl reload
+
+* Configuration
+:PROPERTIES:
+:DESCRIPTION: The control directory and the knobs that change behaviour.
+:END:
+
+All configuration is control files under =/etc/qmail/=. The run scripts read
+most of them *at exec time*, so a change plus =qmailctl restart= is the usual
+apply step (=reload= only re-reads =locals= / =virtualdomains=).
+
+- =softlimit= :: per-process address-space cap; the DSMR default is 100 MB.
+- =servercert.pem= :: presence makes qmail-smtpd advertise STARTTLS; must be
+  readable by =vchkpw=.
+- =spfbehavior= :: SPF strictness on inbound mail.
+- =filterargs= :: presence routes outbound mail through =spawn-filter= →
+  =qmail-dkim= for signing.
+- =srs_secrets=, =srs_domain=, =srs_maxage= :: SRS site configuration consumed by
+  =srsfilter= (the engine is *libsrs2*).
+- =smtpplugins= + =plugins/= :: enable qmail-spp policy plugins (both must exist).
+- =tcp.smtp= → =tcp.smtp.cdb= :: relay rules; recompile with =qmailctl cdb=.
+
+* Extension points
+:PROPERTIES:
+:DESCRIPTION: Signing, rewriting, recipient gating, and plugins.
+:END:
+
+- *Rotate the DKIM key* with =dknewkey control/domainkeys/<domain>/<selector>
+  2048=, publish the new TXT record, then point =control/filterargs= at the new
+  selector and =qmailctl restart=. Manage keys with *dsmr-email-admin(8)*.
+- *Turn SRS on* by populating =control/srs_secrets= / =control/srs_domain=;
+  =srsfilter= then rewrites forwarded senders so they survive SPF (see the
+  *libsrs2* manual).
+- *Swap the recipient gate.* With =control/localfirst= set, the run scripts use
+  the system-first hybrid gate instead of chkuser — see *dsmr-localfirst*.
+- *Authenticated submission backend.* The submission service authenticates with
+  =vchkpw= by default, or with the dovecot bridge when
+  *dsmr-checkpassword-dovecot* is installed (see its manual).
+- *qmail-spp plugins.* Drop a plugin in =control/plugins/= and list it in
+  =control/smtpplugins= to run custom SMTP-time policy.
+
+* Gotchas and debugging
+:PROPERTIES:
+:DESCRIPTION: The traps the DSMR packaging is shaped around.
+:END:
+
+- *=softlimit= too low ⇒ "failed to map segment".* Modern OpenSSL 3 + krb5 need a
+  large address space; the default was raised to 100 MB for exactly this. A
+  qmail-smtpd that dies immediately on connect almost always has an undersized
+  =control/softlimit= (=dsmr-email-admin fix softlimit=).
+- *STARTTLS fails "454 … Permission denied".* =control/servercert.pem= must be
+  group =vchkpw= (qmail-smtpd runs as =vpopmail:vchkpw=); the postinst resets the
+  group on every install/upgrade. A hand-replaced cert with the wrong group
+  breaks TLS.
+- *DKIM TXT record rejected by DNS.* A 2048-bit key exceeds the 255-octet TXT
+  string limit; the postinst splits it into multiple quoted strings within
+  parentheses. Publish it as printed, not as one long string.
+- *Legacy =/var/qmail= migration.* If =/var/qmail= exists as a real directory,
+  the postinst migrates control/users/queue to the new layout, backs the old
+  tree up as =/var/qmail.pre-dsmr-<timestamp>=, and replaces =/var/qmail= with a
+  symlink. Check that backup before deleting anything.
+- *Services do not start on install.* This package only *installs* the supervise
+  sources; activation is *dsmr-qmail-run*'s job. If =qmailctl stat= shows nothing
+  supervised, install/upgrade =dsmr-qmail-run=.
+- *=spfquery= is installed by hand.* qmail's =hier.c= does not install it, so the
+  packaging does — relevant only if you rebuild and wonder where it went.
+
+* See also
+:PROPERTIES:
+:DESCRIPTION: The stack neighbours and the upstream pages.
+:END:
+
+*dsmr-qmail-run* (service activation, =qmailctl=, run scripts), *vpopmail* (virtual
+users, =vchkpw=), *dovecot-vpopmail* (IMAP), *ucspi-ssl* (TLS transport),
+*libsrs2* (SRS engine), *dsmr-localfirst* (system-first recipient gate),
+*dsmr-email-admin(8)* (DKIM/SPF/key tooling), and the upstream man pages shipped
+in this package. See the DSMR stack documentation website for the whole stack.
