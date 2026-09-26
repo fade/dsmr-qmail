@@ -1,3 +1,12 @@
+netqmail (1.06.3-13) trixie; urgency=low
+
+  * Ship /usr/lib/qmail/supervise/qmail-send/run with ./Maildir/ as the
+    default delivery, matching dsmr-qmail-run.  The previous ./Maildir, with
+    no trailing slash, is an mbox path and defers every delivery to a user
+    who has no .qmail file.
+
+ -- Brian O'Reilly <fade@deepsky.com>  Sat, 26 Sep 2026 17:21:24 +0000
+
 netqmail (1.06.3-12) trixie; urgency=low
 
   * Ship a DSMR-focused GNU info manual and HTML doc page derived from an
